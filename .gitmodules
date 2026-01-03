@@ -1,0 +1,6 @@
+[submodule "vendor/ccl_chromium_reader"]
+	path = vendor/ccl_chromium_reader
+	url = https://github.com/cclgroupltd/ccl_chromium_reader.git
+[submodule "vendor/ccl_simplesnappy"]
+	path = vendor/ccl_simplesnappy
+	url = https://github.com/cclgroupltd/ccl_simplesnappy.git

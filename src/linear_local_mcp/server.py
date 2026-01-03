@@ -524,6 +524,112 @@ def get_issue_comments(identifier: str) -> dict[str, Any]:
     }
 
 
+def _enrich_comments_for_issue(
+    reader: LinearLocalReader, issue_id: str
+) -> list[dict[str, Any]]:
+    """Helper to get enriched comments for an issue."""
+    comments = reader.get_comments_for_issue(issue_id)
+    enriched = []
+    for comment in comments:
+        user = reader.users.get(comment.get("userId", ""), {})
+        enriched.append(
+            {
+                "author": user.get("name", "Unknown"),
+                "body": comment.get("body", ""),
+                "createdAt": comment.get("createdAt"),
+            }
+        )
+    return enriched
+
+
+@mcp.tool()
+def get_my_issues_with_comments(
+    name: str,
+    state_type: str | None = None,
+    updated_after: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """
+    Get issues assigned to a user WITH their comments bundled.
+
+    This is more efficient than calling get_my_issues + get_issue_comments separately.
+    Returns issues with all comments included in each issue object.
+
+    Args:
+        name: User name to search for
+        state_type: Optional filter by state type (started, unstarted, completed, canceled, backlog)
+        updated_after: Filter to issues updated after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
+        limit: Maximum number of issues to return (default 20, max 50)
+
+    Returns:
+        Dictionary with user info and issues array (each issue includes its comments)
+    """
+    reader = get_reader()
+    limit = min(limit, 50)  # Cap at 50 to keep response size reasonable
+
+    # Parse updated_after filter
+    updated_after_ts = None
+    if updated_after:
+        updated_after_ts = _parse_datetime(updated_after)
+        if updated_after_ts is None:
+            return {"error": f"Invalid updated_after format: {updated_after}"}
+
+    user = reader.find_user(name)
+
+    if not user:
+        return {"error": f"User '{name}' not found"}
+
+    # Get all issues for user, sorted by priority then ID
+    all_issues = sorted(
+        reader.get_issues_for_user(user["id"]),
+        key=lambda x: (x.get("priority") or 4, x.get("id", "")),
+    )
+
+    # Filter by state_type if provided
+    if state_type:
+        all_issues = [
+            i
+            for i in all_issues
+            if reader.get_state_type(i.get("stateId", "")) == state_type
+        ]
+
+    # Filter by updated_after if provided
+    if updated_after_ts is not None:
+        all_issues = [
+            i
+            for i in all_issues
+            if (_parse_datetime(i.get("updatedAt")) or 0) >= updated_after_ts
+        ]
+
+    total_matching = len(all_issues)
+
+    # Take limit
+    page = all_issues[:limit]
+
+    # Build results with comments
+    results = []
+    for issue in page:
+        comments = _enrich_comments_for_issue(reader, issue["id"])
+        results.append(
+            {
+                "identifier": issue.get("identifier"),
+                "title": issue.get("title"),
+                "priority": issue.get("priority"),
+                "state": reader.get_state_name(issue.get("stateId", "")),
+                "stateType": reader.get_state_type(issue.get("stateId", "")),
+                "updatedAt": issue.get("updatedAt"),
+                "comments": comments,
+            }
+        )
+
+    return {
+        "user": {"name": user.get("name"), "email": user.get("email")},
+        "matchingCount": total_matching,
+        "returnedCount": len(results),
+        "issues": results,
+    }
+
+
 @mcp.tool()
 def get_summary() -> dict[str, Any]:
     """

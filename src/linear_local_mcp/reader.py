@@ -2,9 +2,10 @@
 Linear Local Data Reader with TTL-based caching.
 
 Reads Linear's local IndexedDB cache to provide fast access to issues, users,
-teams, and workflow states without API calls.
+teams, workflow states, and comments without API calls.
 """
 
+import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ class CachedData:
     users: dict[str, dict[str, Any]] = field(default_factory=dict)
     states: dict[str, dict[str, Any]] = field(default_factory=dict)
     issues: dict[str, dict[str, Any]] = field(default_factory=dict)
+    comments: dict[str, dict[str, Any]] = field(default_factory=dict)
+    comments_by_issue: dict[str, list[str]] = field(default_factory=dict)
     loaded_at: float = 0.0
 
     def is_expired(self) -> bool:
@@ -84,6 +87,34 @@ class LinearLocalReader:
         if isinstance(val, bytes):
             return val.decode("utf-8", errors="replace")
         return str(val)
+
+    def _extract_comment_text(self, body_data: Any) -> str:
+        """Extract plain text from ProseMirror bodyData format."""
+        if body_data is None:
+            return ""
+        if isinstance(body_data, str):
+            try:
+                body_data = json.loads(body_data)
+            except json.JSONDecodeError:
+                return body_data
+
+        def extract(node: Any) -> str:
+            if isinstance(node, dict):
+                node_type = node.get("type", "")
+                if node_type == "text":
+                    return node.get("text", "")
+                if node_type == "suggestion_userMentions":
+                    label = node.get("attrs", {}).get("label", "")
+                    return f"@{label}" if label else ""
+                if node_type == "hardBreak":
+                    return "\n"
+                content = node.get("content", [])
+                return "".join(extract(c) for c in content)
+            elif isinstance(node, list):
+                return "".join(extract(c) for c in node)
+            return ""
+
+        return extract(body_data)
 
     def _load_from_store(
         self, db: ccl_chromium_indexeddb.WrappedDatabase, store_name: str
@@ -163,6 +194,27 @@ class LinearLocalReader:
                     "updatedAt": val.get("updatedAt"),
                 }
 
+        # Load comments
+        if self._stores.comments:
+            for val in self._load_from_store(db, self._stores.comments):
+                comment_id = val.get("id")
+                issue_id = val.get("issueId")
+                if not comment_id or not issue_id:
+                    continue
+
+                cache.comments[comment_id] = {
+                    "id": comment_id,
+                    "issueId": issue_id,
+                    "userId": val.get("userId"),
+                    "body": self._extract_comment_text(val.get("bodyData")),
+                    "createdAt": val.get("createdAt"),
+                    "updatedAt": val.get("updatedAt"),
+                }
+
+                if issue_id not in cache.comments_by_issue:
+                    cache.comments_by_issue[issue_id] = []
+                cache.comments_by_issue[issue_id].append(comment_id)
+
         self._cache = cache
 
     def _ensure_cache(self) -> CachedData:
@@ -190,6 +242,18 @@ class LinearLocalReader:
     def issues(self) -> dict[str, dict[str, Any]]:
         """Get all issues."""
         return self._ensure_cache().issues
+
+    @property
+    def comments(self) -> dict[str, dict[str, Any]]:
+        """Get all comments."""
+        return self._ensure_cache().comments
+
+    def get_comments_for_issue(self, issue_id: str) -> list[dict[str, Any]]:
+        """Get all comments for an issue, sorted by creation time."""
+        cache = self._ensure_cache()
+        comment_ids = cache.comments_by_issue.get(issue_id, [])
+        comments = [cache.comments[cid] for cid in comment_ids if cid in cache.comments]
+        return sorted(comments, key=lambda c: c.get("createdAt", ""))
 
     def find_user(self, search: str) -> dict[str, Any] | None:
         """
@@ -287,4 +351,5 @@ class LinearLocalReader:
             "users": len(cache.users),
             "states": len(cache.states),
             "issues": len(cache.issues),
+            "comments": len(cache.comments),
         }

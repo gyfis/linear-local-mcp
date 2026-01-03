@@ -19,6 +19,7 @@ class DetectedStores:
     teams: str | None = None
     users: list[str] | None = None
     workflow_states: list[str] | None = None
+    comments: str | None = None
 
 
 def _is_issue_record(record: dict[str, Any]) -> bool:
@@ -52,6 +53,12 @@ def _is_workflow_state_record(record: dict[str, Any]) -> bool:
     state_type = record.get("type")
     valid_types = {"started", "unstarted", "completed", "canceled", "backlog"}
     return state_type in valid_types
+
+
+def _is_comment_record(record: dict[str, Any]) -> bool:
+    """Check if a record looks like a comment."""
+    required = {"issueId", "userId", "bodyData", "createdAt"}
+    return required.issubset(record.keys())
 
 
 def detect_stores(db: ccl_chromium_indexeddb.WrappedDatabase) -> DetectedStores:
@@ -91,6 +98,8 @@ def detect_stores(db: ccl_chromium_indexeddb.WrappedDatabase) -> DetectedStores:
                     if result.workflow_states is None:
                         result.workflow_states = []
                     result.workflow_states.append(store_name)
+                elif _is_comment_record(val) and result.comments is None:
+                    result.comments = store_name
 
                 break  # Only check first record
         except Exception:

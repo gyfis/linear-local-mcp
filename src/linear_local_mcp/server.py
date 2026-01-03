@@ -484,12 +484,53 @@ def get_my_issues(
 
 
 @mcp.tool()
+def get_issue_comments(identifier: str) -> dict[str, Any]:
+    """
+    Get all comments for an issue.
+
+    Args:
+        identifier: Issue identifier like 'T-1234' or 'EMA-567'
+
+    Returns:
+        Dictionary with issue info and list of comments with author names
+    """
+    reader = get_reader()
+    issue = reader.get_issue_by_identifier(identifier)
+
+    if not issue:
+        return {"error": f"Issue '{identifier}' not found"}
+
+    comments = reader.get_comments_for_issue(issue["id"])
+
+    enriched_comments = []
+    for comment in comments:
+        user = reader.users.get(comment.get("userId", ""), {})
+        enriched_comments.append(
+            {
+                "id": comment.get("id"),
+                "author": user.get("name", "Unknown"),
+                "body": comment.get("body", ""),
+                "createdAt": comment.get("createdAt"),
+            }
+        )
+
+    return {
+        "issue": {
+            "identifier": issue.get("identifier"),
+            "title": issue.get("title"),
+        },
+        "commentCount": len(enriched_comments),
+        "comments": enriched_comments,
+    }
+
+
+@mcp.tool()
 def get_summary() -> dict[str, Any]:
     """
     Get a summary of the Linear local data.
 
     Returns:
-        Dictionary with counts of teams, users, states, and issues
+        Dictionary with counts of teams, users, states, issues, and comments
     """
     reader = get_reader()
     return reader.get_summary()

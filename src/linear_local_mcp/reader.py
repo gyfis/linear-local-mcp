@@ -35,6 +35,7 @@ class CachedData:
     issues: dict[str, dict[str, Any]] = field(default_factory=dict)
     comments: dict[str, dict[str, Any]] = field(default_factory=dict)
     comments_by_issue: dict[str, list[str]] = field(default_factory=dict)
+    projects: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded_at: float = 0.0
 
     def is_expired(self) -> bool:
@@ -215,6 +216,28 @@ class LinearLocalReader:
                     cache.comments_by_issue[issue_id] = []
                 cache.comments_by_issue[issue_id].append(comment_id)
 
+        # Load projects
+        if self._stores.projects:
+            for val in self._load_from_store(db, self._stores.projects):
+                cache.projects[val["id"]] = {
+                    "id": val["id"],
+                    "name": val.get("name"),
+                    "description": val.get("description"),
+                    "slugId": val.get("slugId"),
+                    "icon": val.get("icon"),
+                    "color": val.get("color"),
+                    "state": val.get("state"),
+                    "statusId": val.get("statusId"),
+                    "priority": val.get("priority"),
+                    "teamIds": val.get("teamIds", []),
+                    "memberIds": val.get("memberIds", []),
+                    "leadId": val.get("leadId"),
+                    "startDate": val.get("startDate"),
+                    "targetDate": val.get("targetDate"),
+                    "createdAt": val.get("createdAt"),
+                    "updatedAt": val.get("updatedAt"),
+                }
+
         self._cache = cache
 
     def _ensure_cache(self) -> CachedData:
@@ -247,6 +270,11 @@ class LinearLocalReader:
     def comments(self) -> dict[str, dict[str, Any]]:
         """Get all comments."""
         return self._ensure_cache().comments
+
+    @property
+    def projects(self) -> dict[str, dict[str, Any]]:
+        """Get all projects."""
+        return self._ensure_cache().projects
 
     def get_comments_for_issue(self, issue_id: str) -> list[dict[str, Any]]:
         """Get all comments for an issue, sorted by creation time."""
@@ -311,6 +339,36 @@ class LinearLocalReader:
                 return issue
         return None
 
+    def find_project(self, search: str) -> dict[str, Any] | None:
+        """Find a project by name or slugId (case-insensitive partial match)."""
+        search_lower = search.lower()
+        candidates: list[tuple[int, dict[str, Any]]] = []
+
+        for project in self.projects.values():
+            name = self._to_str(project.get("name", ""))
+            slug_id = self._to_str(project.get("slugId", ""))
+
+            name_lower = name.lower()
+            slug_lower = slug_id.lower()
+
+            if search_lower in name_lower or search_lower == slug_lower:
+                score = 0
+                if name_lower == search_lower:
+                    score = 100
+                elif name_lower.startswith(search_lower):
+                    score = 80
+                elif slug_lower == search_lower:
+                    score = 70
+                else:
+                    score = 10
+
+                candidates.append((score, project))
+
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
+            return candidates[0][1]
+        return None
+
     def get_issues_for_user(self, user_id: str) -> list[dict[str, Any]]:
         """Get all issues assigned to a user."""
         return [
@@ -352,4 +410,5 @@ class LinearLocalReader:
             "states": len(cache.states),
             "issues": len(cache.issues),
             "comments": len(cache.comments),
+            "projects": len(cache.projects),
         }

@@ -61,6 +61,7 @@ def list_issues(
     state_type: str | None = None,
     priority: int | None = None,
     updated_after: str | None = None,
+    created_after: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
 ) -> dict[str, Any]:
@@ -73,6 +74,7 @@ def list_issues(
         state_type: Filter by state type (started, unstarted, completed, canceled, backlog)
         priority: Filter by priority (1=Urgent, 2=High, 3=Normal, 4=Low)
         updated_after: Filter to issues updated after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
+        created_after: Filter to issues created after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
         limit: Maximum number of issues to return per page (default 50, max 100)
         cursor: Pagination cursor from previous response (issue ID to start after)
 
@@ -89,6 +91,18 @@ def list_issues(
         if updated_after_ts is None:
             return {
                 "error": f"Invalid updated_after format: {updated_after}",
+                "issues": [],
+                "nextCursor": None,
+                "totalCount": 0,
+            }
+
+    # Parse created_after filter
+    created_after_ts = None
+    if created_after:
+        created_after_ts = _parse_datetime(created_after)
+        if created_after_ts is None:
+            return {
+                "error": f"Invalid created_after format: {created_after}",
                 "issues": [],
                 "nextCursor": None,
                 "totalCount": 0,
@@ -133,6 +147,10 @@ def list_issues(
         if updated_after_ts is not None:
             issue_updated = _parse_datetime(issue.get("updatedAt"))
             if issue_updated is None or issue_updated < updated_after_ts:
+                continue
+        if created_after_ts is not None:
+            issue_created = _parse_datetime(issue.get("createdAt"))
+            if issue_created is None or issue_created < created_after_ts:
                 continue
         filtered.append(issue)
 
@@ -377,6 +395,7 @@ def get_my_issues(
     name: str,
     state_type: str | None = None,
     updated_after: str | None = None,
+    created_after: str | None = None,
     limit: int = 20,
     cursor: str | None = None,
 ) -> dict[str, Any]:
@@ -390,6 +409,7 @@ def get_my_issues(
         name: User name to search for
         state_type: Optional filter by state type (started, unstarted, completed, canceled, backlog)
         updated_after: Filter to issues updated after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
+        created_after: Filter to issues created after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
         limit: Maximum number of issues to return (default 20, max 100)
         cursor: Pagination cursor from previous response (issue ID to start after)
 
@@ -405,6 +425,13 @@ def get_my_issues(
         updated_after_ts = _parse_datetime(updated_after)
         if updated_after_ts is None:
             return {"error": f"Invalid updated_after format: {updated_after}"}
+
+    # Parse created_after filter
+    created_after_ts = None
+    if created_after:
+        created_after_ts = _parse_datetime(created_after)
+        if created_after_ts is None:
+            return {"error": f"Invalid created_after format: {created_after}"}
 
     user = reader.find_user(name)
 
@@ -437,6 +464,14 @@ def get_my_issues(
             i
             for i in all_issues
             if (_parse_datetime(i.get("updatedAt")) or 0) >= updated_after_ts
+        ]
+
+    # Filter by created_after if provided
+    if created_after_ts is not None:
+        all_issues = [
+            i
+            for i in all_issues
+            if (_parse_datetime(i.get("createdAt")) or 0) >= created_after_ts
         ]
 
     total_matching = len(all_issues)
@@ -547,6 +582,7 @@ def get_my_issues_with_comments(
     name: str,
     state_type: str | None = None,
     updated_after: str | None = None,
+    created_after: str | None = None,
     limit: int = 20,
 ) -> dict[str, Any]:
     """
@@ -559,6 +595,7 @@ def get_my_issues_with_comments(
         name: User name to search for
         state_type: Optional filter by state type (started, unstarted, completed, canceled, backlog)
         updated_after: Filter to issues updated after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
+        created_after: Filter to issues created after this ISO-8601 datetime (e.g., '2024-01-01T00:00:00Z')
         limit: Maximum number of issues to return (default 20, max 50)
 
     Returns:
@@ -573,6 +610,13 @@ def get_my_issues_with_comments(
         updated_after_ts = _parse_datetime(updated_after)
         if updated_after_ts is None:
             return {"error": f"Invalid updated_after format: {updated_after}"}
+
+    # Parse created_after filter
+    created_after_ts = None
+    if created_after:
+        created_after_ts = _parse_datetime(created_after)
+        if created_after_ts is None:
+            return {"error": f"Invalid created_after format: {created_after}"}
 
     user = reader.find_user(name)
 
@@ -599,6 +643,14 @@ def get_my_issues_with_comments(
             i
             for i in all_issues
             if (_parse_datetime(i.get("updatedAt")) or 0) >= updated_after_ts
+        ]
+
+    # Filter by created_after if provided
+    if created_after_ts is not None:
+        all_issues = [
+            i
+            for i in all_issues
+            if (_parse_datetime(i.get("createdAt")) or 0) >= created_after_ts
         ]
 
     total_matching = len(all_issues)
@@ -636,10 +688,102 @@ def get_summary() -> dict[str, Any]:
     Get a summary of the Linear local data.
 
     Returns:
-        Dictionary with counts of teams, users, states, issues, and comments
+        Dictionary with counts of teams, users, states, issues, projects, and comments
     """
     reader = get_reader()
     return reader.get_summary()
+
+
+@mcp.tool()
+def list_projects(
+    team: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    List all projects.
+
+    Args:
+        team: Optional team key or name to filter projects
+        limit: Maximum number of projects to return (default 50, max 100)
+
+    Returns:
+        List of projects with their details
+    """
+    reader = get_reader()
+    limit = min(limit, 100)
+
+    # Resolve team ID if provided
+    team_id = None
+    if team:
+        team_obj = reader.find_team(team)
+        if team_obj:
+            team_id = team_obj["id"]
+        else:
+            return []
+
+    results = []
+    for project in reader.projects.values():
+        # Filter by team if specified
+        if team_id:
+            project_team_ids = project.get("teamIds", [])
+            if team_id not in project_team_ids:
+                continue
+
+        # Count issues in this project
+        issue_count = sum(
+            1 for i in reader.issues.values() if i.get("projectId") == project["id"]
+        )
+
+        results.append({**project, "issueCount": issue_count})
+
+        if len(results) >= limit:
+            break
+
+    # Sort by name
+    results.sort(key=lambda x: x.get("name", "") or "")
+    return results
+
+
+@mcp.tool()
+def get_project(query: str) -> dict[str, Any] | None:
+    """
+    Get a project by name or slugId.
+
+    Args:
+        query: Project name or slugId to search for (partial match)
+
+    Returns:
+        The project if found, None otherwise
+    """
+    reader = get_reader()
+    project = reader.find_project(query)
+
+    if project:
+        # Count issues in this project
+        issue_count = sum(
+            1 for i in reader.issues.values() if i.get("projectId") == project["id"]
+        )
+
+        # Get team names
+        team_names = []
+        for team_id in project.get("teamIds", []):
+            team = reader.teams.get(team_id, {})
+            if team.get("name"):
+                team_names.append(team.get("name"))
+
+        # Get lead name
+        lead_name = None
+        if project.get("leadId"):
+            lead = reader.users.get(project["leadId"], {})
+            lead_name = lead.get("name")
+
+        return {
+            **project,
+            "issueCount": issue_count,
+            "teamNames": team_names,
+            "leadName": lead_name,
+        }
+    return None
 
 
 def main():

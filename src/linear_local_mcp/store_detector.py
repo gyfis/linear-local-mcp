@@ -20,6 +20,7 @@ class DetectedStores:
     users: list[str] | None = None
     workflow_states: list[str] | None = None
     comments: str | None = None
+    projects: str | None = None
 
 
 def _is_issue_record(record: dict[str, Any]) -> bool:
@@ -58,6 +59,12 @@ def _is_workflow_state_record(record: dict[str, Any]) -> bool:
 def _is_comment_record(record: dict[str, Any]) -> bool:
     """Check if a record looks like a comment."""
     required = {"issueId", "userId", "bodyData", "createdAt"}
+    return required.issubset(record.keys())
+
+
+def _is_project_record(record: dict[str, Any]) -> bool:
+    """Check if a record looks like a project."""
+    required = {"name", "description", "teamIds", "startDate", "targetDate", "statusId"}
     return required.issubset(record.keys())
 
 
@@ -100,6 +107,8 @@ def detect_stores(db: ccl_chromium_indexeddb.WrappedDatabase) -> DetectedStores:
                     result.workflow_states.append(store_name)
                 elif _is_comment_record(val) and result.comments is None:
                     result.comments = store_name
+                elif _is_project_record(val) and result.projects is None:
+                    result.projects = store_name
 
                 break  # Only check first record
         except Exception:
